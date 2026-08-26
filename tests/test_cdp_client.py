@@ -51,6 +51,31 @@ class CDPClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(CDPClient._is_recv_data_available({"result": {"value": False}}))
         self.assertFalse(CDPClient._is_recv_data_available({}))
 
+    def test_frames_from_tree_walks_resource_iframes(self) -> None:
+        frames = tuple(
+            CDPClient._frames_from_tree(
+                {
+                    "frameTree": {
+                        "frame": {"id": "root", "url": "nui://game/ui/root.html"},
+                        "childFrames": [
+                            {
+                                "frame": {"id": "resource", "url": "nui://transport-tycoon/nui/index.html"},
+                                "childFrames": [],
+                            }
+                        ],
+                    }
+                }
+            )
+        )
+
+        self.assertEqual(
+            frames,
+            (
+                {"id": "root", "url": "nui://game/ui/root.html"},
+                {"id": "resource", "url": "nui://transport-tycoon/nui/index.html"},
+            ),
+        )
+
     async def test_initial_failure_stops_without_retrying(self) -> None:
         running = asyncio.Event()
         running.set()

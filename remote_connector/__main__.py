@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
     try:
         asyncio.run(main(parse_args().resource_name))
-    except RuntimeError, KeyboardInterrupt:
+    except (RuntimeError, KeyboardInterrupt):
         logging.info("Exiting...")
     except Exception:
         logging.exception("Unhandled connector failure")

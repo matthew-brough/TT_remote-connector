@@ -29,7 +29,7 @@ class CDPConnectionError(RuntimeError):
 
 
 class CDPClient:
-    _CONTEXT_TIMEOUT_SECONDS = 5.0
+    _CONTEXT_SETTLE_SECONDS = 5.0
     _RECONNECT_DELAY_SECONDS = 1.0
 
     def __init__(self, client_session: ClientSession, running: Event, resource_name: str) -> None:
@@ -39,6 +39,7 @@ class CDPClient:
         self.resource_name = resource_name
         self.client: Client | None = None
         self.context_id: int | None = None
+        self.context_ids_by_frame: dict[str, int] = {}
         self.nodes: Queue[Position] = Queue()
 
     async def get_ws_url(self) -> str:
@@ -53,6 +54,7 @@ class CDPClient:
         if not isinstance(data, list):
             raise CDPConnectionError("FiveM CDP returned an invalid target list")
 
+        game_root_websocket_url: str | None = None
         for target in data:
             if not isinstance(target, Mapping):
                 continue
@@ -64,6 +66,13 @@ class CDPClient:
             if self._resource_from_target_url(target_url) == self.resource_name:
                 self.logger.info("Found CDP target for resource %s", self.resource_name)
                 return websocket_url
+
+            if target_url == "nui://game/ui/root.html":
+                game_root_websocket_url = websocket_url
+
+        if game_root_websocket_url is not None:
+            self.logger.info("Using the game root CDP target to find resource %s", self.resource_name)
+            return game_root_websocket_url
 
         raise CDPConnectionError(f"FiveM NUI resource {self.resource_name!r} is not an inspectable CDP target")
 
@@ -102,7 +111,7 @@ class CDPClient:
     ) -> None:
         websocket_url = await self.get_ws_url()
         self.context_id = None
-        context_ready = asyncio.Event()
+        self.context_ids_by_frame.clear()
 
         try:
             client_connection = await cripy.connect(websocket_url, remote=False, flatten_sessions=True)
@@ -112,12 +121,12 @@ class CDPClient:
             client = client_connection
             self.client = client
             client.Runtime.bindingCalled(self.on_binding_called)
-            client.Runtime.executionContextCreated(
-                lambda payload: self._on_execution_context_created(payload, context_ready)
-            )
+            client.Runtime.executionContextCreated(self._on_execution_context_created)
+            await client.Page.enable()
             await client.Runtime.enable()
-            await asyncio.wait_for(context_ready.wait(), timeout=self._CONTEXT_TIMEOUT_SECONDS)
+            await asyncio.sleep(self._CONTEXT_SETTLE_SECONDS)
 
+            self.context_id = await self._resolve_context()
             context_id = self._require_context_id()
             capability = await client.Runtime.evaluate(
                 expression="typeof globalThis.recvData === 'function'",
@@ -157,7 +166,7 @@ class CDPClient:
         remote_result = result.get("result")
         return isinstance(remote_result, Mapping) and remote_result.get("value") is True
 
-    def _on_execution_context_created(self, payload: object, context_ready: Event) -> None:
+    def _on_execution_context_created(self, payload: object) -> None:
         if not isinstance(payload, Mapping):
             return
         context = payload.get("context")
@@ -167,11 +176,61 @@ class CDPClient:
         auxiliary_data = context.get("auxData")
         if not isinstance(context_id, int):
             return
-        if isinstance(auxiliary_data, Mapping) and auxiliary_data.get("isDefault") is False:
+        if not isinstance(auxiliary_data, Mapping):
+            return
+        frame_id = auxiliary_data.get("frameId")
+        if not isinstance(frame_id, str):
             return
 
-        self.context_id = context_id
-        context_ready.set()
+        self.context_ids_by_frame[frame_id] = context_id
+
+    async def _resolve_context(self) -> int | None:
+        if self.client is None:
+            raise CDPConnectionError("Cannot resolve a context without a CDP client")
+
+        frame_tree_response: object = await self.client.Page.getFrameTree()
+        for frame in self._frames_from_tree(frame_tree_response):
+            frame_id = frame.get("id")
+            frame_url = frame.get("url")
+            if (
+                isinstance(frame_id, str)
+                and isinstance(frame_url, str)
+                and self._resource_from_target_url(frame_url) == self.resource_name
+                and (context_id := self.context_ids_by_frame.get(frame_id)) is not None
+            ):
+                return context_id
+
+        for context_id in self.context_ids_by_frame.values():
+            capability = await self.client.Runtime.evaluate(
+                expression="typeof globalThis.recvData === 'function'",
+                contextId=context_id,
+                returnByValue=True,
+            )
+            if self._is_recv_data_available(capability):
+                return context_id
+
+        return None
+
+    @classmethod
+    def _frames_from_tree(cls, response: object) -> Iterable[Mapping[str, object]]:
+        if not isinstance(response, Mapping):
+            return ()
+        frame_tree = response.get("frameTree")
+        if not isinstance(frame_tree, Mapping):
+            return ()
+        return cls._walk_frame_tree(frame_tree)
+
+    @classmethod
+    def _walk_frame_tree(cls, frame_tree: Mapping[str, object]) -> Iterable[Mapping[str, object]]:
+        frame = frame_tree.get("frame")
+        if isinstance(frame, Mapping):
+            yield frame
+        child_frames = frame_tree.get("childFrames")
+        if not isinstance(child_frames, list):
+            return
+        for child_frame in child_frames:
+            if isinstance(child_frame, Mapping):
+                yield from cls._walk_frame_tree(child_frame)
 
     def _require_context_id(self) -> int:
         if self.context_id is None:
@@ -183,6 +242,7 @@ class CDPClient:
             await self.client.dispose()
             self.client = None
         self.context_id = None
+        self.context_ids_by_frame.clear()
 
     async def on_binding_called(self, payload: Mapping[str, object]) -> None:
         encoded_payload = payload.get("payload")
