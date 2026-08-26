@@ -1,0 +1,42 @@
+[project]
+name = "tt-remote-connector"
+version = "0.1.0"
+description = "A local CDP connector for the Transport Tycoon FiveM NUI"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "aiohttp>=3.13.0",
+    "async-timeout>=5.0.1",
+    "cripy @ git+https://github.com/artemOP/chrome-remote-interface-py-win.git@4eda69e580c2e88839015126c0443e090a06c419",
+    "ujson>=5.11.0",
+    "websockets>=12,<14",
+]
+
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["remote_connector"]
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.407",
+    "ruff>=0.14.0",
+]
+
+[tool.pyright]
+pythonVersion = "3.14"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

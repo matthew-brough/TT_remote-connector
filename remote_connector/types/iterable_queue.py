@@ -1,20 +1,17 @@
 from __future__ import annotations
 
 import queue
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from typing import Generator, Any
+from collections.abc import Generator
 
 
-class Queue(queue.Queue):
-    def __enter__(self, block=True, timeout=None) -> Any:
+class Queue[T](queue.Queue[T]):
+    def __enter__(self, block: bool = True, timeout: float | None = None) -> T:
         return self.get(block, timeout)
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         self.task_done()
 
-    def __iter__(self) -> Generator[Any, None, None]:
+    def __iter__(self) -> Generator[T]:
         while not self.empty():
             with self as node:
                 yield node
