@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import logging
 
@@ -16,18 +17,24 @@ logging.getLogger("asyncio").setLevel(logging.ERROR)
 logging.getLogger("websockets").setLevel(logging.ERROR)
 
 
-async def main() -> None:
-    RUNNING_LOCK = asyncio.Event()
+async def main(resource_name: str) -> None:
+    running_lock = asyncio.Event()
 
     async with aiohttp.ClientSession(json_serialize=json.dumps) as session:
-        RUNNING_LOCK.set()
-        await CDPClient(session, RUNNING_LOCK).enter(EventSubscriptions.enable_position)
+        running_lock.set()
+        await CDPClient(session, running_lock, resource_name).enter(EventSubscriptions.enable_position)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Connect to a specific FiveM NUI resource through CDP.")
+    parser.add_argument("resource_name", help="FiveM NUI resource name to attach to")
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
-    except (RuntimeError, KeyboardInterrupt):
+        asyncio.run(main(parse_args().resource_name))
+    except RuntimeError, KeyboardInterrupt:
         logging.info("Exiting...")
-    except Exception as e:
-        logging.exception(e)
+    except Exception:
+        logging.exception("Unhandled connector failure")
